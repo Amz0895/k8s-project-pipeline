@@ -1,0 +1,67 @@
+pipeline {
+    agent any
+    tools {
+        maven 'mymaven'
+    }
+    stages {
+        stage ('Code') {
+            steps {
+               git branch: 'main', url: 'https://github.com/Amz0895/docker-webapp-k8s.git'
+            }
+        }
+        stage ('Maven') {
+            steps {
+                sh 'mvn clean install'
+            }
+        }
+        stage ('CQA') {
+            steps {
+             withSonarQubeEnv('mysonar') {
+      sh "mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=myproject"
+                                }
+                      }
+                   } 
+        stage ("QualityGates") {
+            steps {
+               waitForQualityGate abortPipeline: true, credentialsId: 'sonar-cred' 
+            }
+        }   
+        stage ("Artifact") {
+            steps {
+                nexusArtifactUploader artifacts: [[artifactId: 'vprofile', classifier: '', file: 'target/vprofile-v2.war', type: 'war']], credentialsId: 'nexus', groupId: 'com.visualpathit', nexusUrl: '18.208.201.200:8081/', nexusVersion: 'nexus3', protocol: 'http', repository: 'myrepo', version: 'v2'
+            }
+        }
+        stage ("Images") {
+            steps {
+                sh 'docker build -t appimage .'
+                sh 'docker build -t dbimage Docker-db'
+            }
+         }
+         stage ('Scan') {
+             steps {
+                 sh 'trivy image appimage >> app-image-reports.txt'
+                 sh 'trivy image dbimage >> db-image-reports.txt'
+             }
+         }
+         stage ('Registry') {
+             steps {
+                 script {
+                     withDockerRegistry(credentialsId: 'dockerhub') {
+                       sh 'docker tag appimage harshav323/king:app'
+                       sh 'docker tag dbimage harshav323/king:db'
+                       sh 'docker push harshav323/king:app'
+                       sh 'docker push harshav323/king:db'
+                 }
+             }
+         }
+       }
+         stage ('Compose') {
+             steps {
+                 sh 'docker-compose build'
+                 sh 'docker-compose up -d'
+                 sleep 10
+                 sh 'docker ps'
+             }
+         }
+  }
+}
